@@ -6,52 +6,58 @@ import requests
 import time
 
 # Page Config
-st.set_page_config(page_title="Stock AI + Nifty Indicators", layout="centered")
+st.set_page_config(page_title="📊 Stock AI + Nifty Indicators", layout="centered")
 st.title("📈 Smart Stock Buy/Sell Suggestion")
 
-# User Input
+# Stock Input
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 
-# Stock Data + Technical Indicators
+# Stock Data Section
 if ticker:
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-    if df.empty or 'Close' not in df.columns:
-        st.error("⚠️ Could not fetch stock data. Please check the ticker symbol.")
-    else:
-        df['SMA20'] = df['Close'].rolling(window=20).mean()
-        delta = df['Close'].diff()
-        gain = np.where(delta > 0, delta, 0)
-        loss = np.where(delta < 0, -delta, 0)
-        avg_gain = pd.Series(gain).rolling(window=14).mean()
-        avg_loss = pd.Series(loss).rolling(window=14).mean()
-        rs = avg_gain / avg_loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-
-        latest = df.dropna().iloc[-1]
-        current_price = latest['Close']
-        sma20 = latest['SMA20']
-        rsi = latest['RSI']
-
-        st.subheader("📊 Latest Technical Data")
-        st.write(f"**Current Price:** ₹{current_price:.2f}")
-        st.write(f"**SMA-20:** ₹{sma20:.2f}")
-        st.write(f"**RSI (14-day):** {rsi:.2f}")
-
-        # Signal
-        if current_price > sma20 and rsi < 70:
-            signal = "🟢 **Buy Signal** – Momentum looks strong."
-        elif current_price < sma20 and rsi > 30:
-            signal = "🔴 **Sell Signal** – Weak price action."
+    try:
+        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+        if df.empty or 'Close' not in df.columns:
+            st.error("⚠️ Could not fetch stock data.")
         else:
-            signal = "⚪ **Hold** – Trend unclear."
+            df = df[['Close']].dropna()
 
-        st.subheader("🧠 AI Suggestion")
-        st.markdown(signal)
+            if len(df) < 20:
+                st.warning("⚠️ Not enough data for indicators.")
+            else:
+                df['SMA20'] = df['Close'].rolling(window=20).mean()
+                delta = df['Close'].diff()
+                gain = delta.clip(lower=0)
+                loss = -delta.clip(upper=0)
+                avg_gain = gain.rolling(window=14).mean()
+                avg_loss = loss.rolling(window=14).mean()
+                rs = avg_gain / avg_loss
+                df['RSI'] = 100 - (100 / (1 + rs))
+                df.dropna(inplace=True)
 
-        # Chart
-        st.line_chart(df[['Close', 'SMA20']].dropna())
+                latest = df.iloc[-1]
+                st.subheader("📊 Latest Technical Data")
+                st.write(f"**Current Price:** ₹{latest['Close']:.2f}")
+                st.write(f"**SMA-20:** ₹{latest['SMA20']:.2f}")
+                st.write(f"**RSI (14-day):** {latest['RSI']:.2f}")
 
-# --- Nifty Options Function ---
+                if latest['Close'] > latest['SMA20'] and latest['RSI'] < 70:
+                    st.success("🟢 **Buy Signal** – Momentum looks strong.")
+                elif latest['Close'] < latest['SMA20'] and latest['RSI'] > 30:
+                    st.error("🔴 **Sell Signal** – Weak price action.")
+                else:
+                    st.info("⚪ **Hold** – Trend unclear.")
+
+                st.line_chart(df[['Close', 'SMA20']])
+    except Exception as e:
+        st.error("❌ App crashed. Here's the error:")
+        st.code(str(e))
+
+# ----------------------------
+# 📈 Nifty 50 Call/Put OI
+# ----------------------------
+st.markdown("---")
+st.subheader("📈 Nifty 50 Call/Put Indicators")
+
 @st.cache_data(ttl=3600)
 def fetch_nifty_options():
     url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
@@ -63,49 +69,38 @@ def fetch_nifty_options():
     session = requests.Session()
     session.headers.update(headers)
     try:
-        # Required to simulate browser
         session.get("https://www.nseindia.com", timeout=5)
         time.sleep(1)
-        response = session.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            return None
+        res = session.get(url, timeout=5)
+        return res.json()
     except Exception:
         return None
 
-# --- Nifty 50 Call/Put OI Display ---
-st.markdown("---")
-st.subheader("📈 Nifty 50 Call/Put Indicators (Options Data)")
-
 nse_data = fetch_nifty_options()
-
 if nse_data:
     try:
         records = nse_data['records']['data']
         filtered = [item for item in records if 'CE' in item and 'PE' in item]
-        total_call_oi = sum(i['CE']['openInterest'] for i in filtered)
-        total_put_oi = sum(i['PE']['openInterest'] for i in filtered)
+        total_call_oi = sum(i['CE']['openInterest'] for i in filtered if 'CE' in i)
+        total_put_oi = sum(i['PE']['openInterest'] for i in filtered if 'PE' in i)
         pcr = total_put_oi / total_call_oi if total_call_oi else 0
-
-        # Top strikes
-        top_calls = sorted(filtered, key=lambda x: x['CE']['openInterest'], reverse=True)[:3]
-        top_puts = sorted(filtered, key=lambda x: x['PE']['openInterest'], reverse=True)[:3]
 
         st.write(f"📊 **Put/Call Ratio (PCR):** `{pcr:.2f}`")
         st.write(f"🔴 **Total Call OI:** {total_call_oi:,}")
         st.write(f"🟢 **Total Put OI:** {total_put_oi:,}")
 
-        st.markdown("### 🔴 Top 3 Resistance (Call OI)")
-        for row in top_calls:
-            st.write(f"₹{row['strikePrice']} → {row['CE']['openInterest']:,}")
+        st.markdown("### 🔥 Top Resistance Levels (Call OI)")
+        top_calls = sorted(filtered, key=lambda x: x['CE']['openInterest'], reverse=True)[:3]
+        for item in top_calls:
+            st.write(f"₹{item['strikePrice']} → {item['CE']['openInterest']:,}")
 
-        st.markdown("### 🟢 Top 3 Support (Put OI)")
-        for row in top_puts:
-            st.write(f"₹{row['strikePrice']} → {row['PE']['openInterest']:,}")
+        st.markdown("### 🛡️ Top Support Levels (Put OI)")
+        top_puts = sorted(filtered, key=lambda x: x['PE']['openInterest'], reverse=True)[:3]
+        for item in top_puts:
+            st.write(f"₹{item['strikePrice']} → {item['PE']['openInterest']:,}")
 
     except Exception as e:
-        st.error("⚠️ Failed to process options data.")
-        st.text(str(e))
+        st.error("⚠️ Could not process Nifty data.")
+        st.code(str(e))
 else:
-    st.error("❌ Failed to load Nifty 50 options data. NSE may be blocking access.")
+    st.warning("❌ Failed to load Nifty data. NSE may have blocked access.")
