@@ -5,88 +5,103 @@ import numpy as np
 import requests
 import time
 
-# Page Setup
+# Page Config
 st.set_page_config(page_title="Stock AI + Nifty Options", layout="centered")
-st.title("📈 Stock AI with Nifty 50 Call/Put Indicators")
+st.title("📈 Smart Stock Buy/Sell Suggestion")
 
-# — Stock Input & Analysis —
+# User Input
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 
+# --- Stock Data & Analysis ---
 if ticker:
     df = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if df.empty or 'Close' not in df.columns:
-        st.error("⚠️ Could not fetch stock data. Check ticker.")
+        st.error("⚠️ Could not fetch stock data. Please check the ticker symbol.")
     else:
-        df['SMA20'] = df['Close'].rolling(20).mean()
+        df['SMA20'] = df['Close'].rolling(window=20).mean()
         delta = df['Close'].diff()
         gain = np.where(delta > 0, delta, 0)
         loss = np.where(delta < 0, -delta, 0)
-        avg_gain = pd.Series(gain).rolling(14).mean()
-        avg_loss = pd.Series(loss).rolling(14).mean()
-        df['RSI'] = 100 - (100 / (1 + avg_gain / avg_loss))
+        avg_gain = pd.Series(gain).rolling(window=14).mean()
+        avg_loss = pd.Series(loss).rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['RSI'] = 100 - (100 / (1 + rs))
 
         latest = df.dropna().iloc[-1]
-        price, sma, rsi = latest['Close'], latest['SMA20'], latest['RSI']
-        st.subheader("📊 Technical Data")
-        st.write(f"**Price:** ₹{price:.2f}")
-        st.write(f"**SMA‑20:** ₹{sma:.2f}")
-        st.write(f"**RSI (14‑day):** {rsi:.2f}")
+        current_price = latest['Close']
+        sma20 = latest['SMA20']
+        rsi = latest['RSI']
 
-        signal = "⚪ Hold"
-        if price > sma and rsi < 70: signal = "🟢 Buy"
-        elif price < sma and rsi > 30: signal = "🔴 Sell"
-        st.subheader("🧠 AI Signal")
+        st.subheader("### 📊 Latest Technical Data")
+        st.write(f"**Current Price:** ₹{current_price:.2f}")
+        st.write(f"**SMA-20:** ₹{sma20:.2f}")
+        st.write(f"**RSI (14-day):** {rsi:.2f}")
+
+        signal = "⚪ Hold – Wait for better confirmation."
+        if current_price > sma20 and rsi < 70:
+            signal = "🟢 **Buy Signal** – Momentum looks strong."
+        elif current_price < sma20 and rsi > 30:
+            signal = "🔴 **Sell Signal** – Weak price action."
+
+        st.subheader("### 🧠 AI Suggestion")
         st.markdown(signal)
         st.line_chart(df[['Close', 'SMA20']])
 
-# — Nifty Options Chain Fetch Function —
+# --- Nifty Options Fetch Function ---
 @st.cache_data(ttl=3600)
-def get_nifty_chain():
-    headers = {
-        "User-Agent":"Mozilla/5.0",
-        "Accept-Language":"en-US,en;q=0.9",
-        "Referer":"https://www.nseindia.com"
-    }
-    sess = requests.Session()
-    sess.headers.update(headers)
-    sess.get("https://www.nseindia.com", timeout=5)
-    time.sleep(1)
+def get_nifty_options():
     url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
-    res = sess.get(url, headers=headers, timeout=5)
-    return res
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com"
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    try:
+        # NSE requires a home page visit first
+        session.get("https://www.nseindia.com", timeout=5)
+        time.sleep(1)  # Delay to simulate browser
+        response = session.get(url, timeout=5)
+        return response
+    except Exception as e:
+        return None
 
+# --- Nifty 50 Options Data Display ---
 st.markdown("---")
-st.subheader("📈 Nifty 50 Call/Put Indicators")
+st.subheader("📈 Nifty 50 Call/Put Indicators (Options Data)")
 
-res = get_nifty_chain()
-st.write(f"📡 HTTP Status: {res.status_code}")
+response = get_nifty_options()
+if response and response.status_code == 200:
+    try:
+        data = response.json()
+        records = data['records']['data']
+        ce_data = [item for item in records if 'CE' in item and 'PE' in item]
+        
+        total_ce_oi = sum(item['CE']['openInterest'] for item in ce_data)
+        total_pe_oi = sum(item['PE']['openInterest'] for item in ce_data)
+        pcr = total_pe_oi / total_ce_oi if total_ce_oi else 0
 
-try:
-    data = res.json()
-    rows = data['records']['data']
-    ce = [r for r in rows if 'CE' in r]
-    pe = [r for r in rows if 'PE' in r]
+        top_ce = sorted(ce_data, key=lambda x: x['CE']['openInterest'], reverse=True)[:3]
+        top_pe = sorted(ce_data, key=lambda x: x['PE']['openInterest'], reverse=True)[:3]
 
-    top_ce = sorted(ce, key=lambda r: r['CE']['openInterest'], reverse=True)[:3]
-    top_pe = sorted(pe, key=lambda r: r['PE']['openInterest'], reverse=True)[:3]
+        st.write(f"📊 **Put/Call Ratio (PCR):** `{pcr:.2f}`")
+        st.write(f"🔴 **Total Call OI:** {total_ce_oi:,}")
+        st.write(f"🟢 **Total Put OI:** {total_pe_oi:,}")
 
-    total_ce = sum(r['CE']['openInterest'] for r in ce)
-    total_pe = sum(r['PE']['openInterest'] for r in pe)
-    pcr = total_pe/total_ce if total_ce else None
+        st.markdown("### 🔴 Top 3 Resistance (Call OI)")
+        for item in top_ce:
+            st.write(f"₹{item['strikePrice']} → {item['CE']['openInterest']:,}")
 
-    st.write(f"🔁 PCR (Put/Call Ratio): **{pcr:.2f}**")
-    st.write(f"🔴 Total Call OI: {total_ce:,}")
-    st.write(f"🟢 Total Put OI: {total_pe:,}")
+        st.markdown("### 🟢 Top 3 Support (Put OI)")
+        for item in top_pe:
+            st.write(f"₹{item['strikePrice']} → {item['PE']['openInterest']:,}")
 
-    st.markdown("### 🔴 Top 3 Call OI (Resistance)")
-    for r in top_ce:
-        st.write(f"₹{r['CE']['strikePrice']} → {r['CE']['openInterest']:,}")
-
-    st.markdown("### 🟢 Top 3 Put OI (Support)")
-    for r in top_pe:
-        st.write(f"₹{r['PE']['strikePrice']} → {r['PE']['openInterest']:,}")
-
-except Exception as e:
-    st.error("❌ Nifty options fetch failed:")
-    st.write(res.text[:200])
-    st.write(str(e))
+    except Exception as e:
+        st.error("❌ Failed to fetch Nifty 50 options data.")
+        st.text(f"Error: {str(e)}")
+        st.text(response.text[:200])
+else:
+    st.error("❌ Failed to load Nifty 50 options data.")
+    if response:
+        st.text(f"HTTP Error: {response.status_code}")
