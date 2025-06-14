@@ -26,14 +26,13 @@ if symbol:
     st.metric("Breakeven", f"₹{breakeven:.2f}")
     st.metric("P/L", f"₹{profit_loss:.2f}")
 
-    # 🚨 Profit target message
+# 🚨 Profit target message
     if profit_loss >= 1500:
         st.success("💰 Target Met: You made ₹1,500+ profit today!")
     elif profit_loss >= 0:
         st.info("✅ You are in profit. Keep tracking.")
     else:
         st.warning("📉 You are in loss. Be careful.")
-
     # RSI Calculation
     delta = data["Close"].diff()
     gain = delta.where(delta > 0, 0)
