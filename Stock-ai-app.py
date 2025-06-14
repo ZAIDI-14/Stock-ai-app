@@ -13,45 +13,53 @@ ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 if ticker:
     try:
         df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+
         if df.empty or 'Close' not in df.columns:
-            st.error("⚠️ Failed to fetch stock data.")
+            st.error("⚠️ Could not fetch stock data.")
         else:
-            df = df[['Close']].dropna()
-            if len(df) < 20:
+            df = df[['Close']].copy()
+            df.dropna(inplace=True)
+
+            if len(df) < 30:
                 st.warning("⚠️ Not enough data to calculate indicators.")
             else:
                 df['SMA20'] = df['Close'].rolling(window=20).mean()
-                delta = df['Close'].diff()
-                gain = delta.clip(lower=0)
-                loss = -delta.clip(upper=0)
-                avg_gain = gain.rolling(window=14).mean()
-                avg_loss = loss.rolling(window=14).mean()
-                rs = avg_gain / avg_loss
-                df['RSI'] = 100 - (100 / (1 + rs))
-                df = df.dropna()
 
-                latest = df.iloc[-1]
-                st.subheader("📊 Technical Summary")
-                st.write(f"**Price:** ₹{latest['Close']:.2f}")
-                st.write(f"**SMA20:** ₹{latest['SMA20']:.2f}")
-                st.write(f"**RSI:** {latest['RSI']:.2f}")
-
-                # Signal
-                if latest['Close'] > latest['SMA20'] and latest['RSI'] < 70:
-                    st.success("🟢 Buy Signal")
-                elif latest['Close'] < latest['SMA20'] and latest['RSI'] > 30:
-                    st.error("🔴 Sell Signal")
+                # Ensure 'Close' is 1D
+                close = df['Close'].values
+                if close.ndim != 1:
+                    st.error("❌ Close price data invalid format.")
                 else:
-                    st.info("⚪ Hold Signal")
+                    delta = np.diff(close)
+                    gain = np.where(delta > 0, delta, 0)
+                    loss = np.where(delta < 0, -delta, 0)
 
-                # Plot safe
-                try:
+                    avg_gain = pd.Series(gain).rolling(window=14).mean()
+                    avg_loss = pd.Series(loss).rolling(window=14).mean()
+                    rs = avg_gain / avg_loss
+                    rsi = 100 - (100 / (1 + rs))
+
+                    df = df.iloc[1:]  # align with delta
+                    df['RSI'] = rsi.values
+
+                    df.dropna(inplace=True)
+
+                    latest = df.iloc[-1]
+                    st.subheader("📊 Technical Summary")
+                    st.write(f"**Price:** ₹{latest['Close']:.2f}")
+                    st.write(f"**SMA20:** ₹{latest['SMA20']:.2f}")
+                    st.write(f"**RSI:** {latest['RSI']:.2f}")
+
+                    if latest['Close'] > latest['SMA20'] and latest['RSI'] < 70:
+                        st.success("🟢 Buy Signal")
+                    elif latest['Close'] < latest['SMA20'] and latest['RSI'] > 30:
+                        st.error("🔴 Sell Signal")
+                    else:
+                        st.info("⚪ Hold Signal")
+
                     st.line_chart(df[['Close', 'SMA20']])
-                except Exception as plot_error:
-                    st.warning("⚠️ Could not plot chart.")
-                    st.code(str(plot_error))
     except Exception as e:
-        st.error("❌ Stock Data Error:")
+        st.error("❌ Error occurred:")
         st.code(str(e))
 
 # -----------------------
