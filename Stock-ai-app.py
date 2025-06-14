@@ -14,20 +14,16 @@ if ticker:
     if df.empty:
         st.error("⚠️ Could not fetch stock data. Please check the symbol.")
     else:
-        # Drop rows with NaN to avoid ValueError from indicators
+        df['SMA20'] = df['Close'].rolling(window=20).mean()
         df.dropna(inplace=True)
 
         if df.shape[0] < 20:
             st.warning("⚠️ Not enough data to calculate indicators.")
         else:
             try:
-                # Calculate indicators
-                df['SMA20'] = df['Close'].rolling(window=20).mean()
+                # ✅ THIS LINE FIXES THE 1-D ERROR
                 rsi = ta.momentum.RSIIndicator(close=df['Close'], window=14)
                 df['RSI'] = rsi.rsi()
-
-                # Again drop NaN after indicators
-                df.dropna(inplace=True)
 
                 latest_close = df['Close'].iloc[-1]
                 latest_sma = df['SMA20'].iloc[-1]
