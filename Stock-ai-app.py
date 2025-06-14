@@ -1,103 +1,112 @@
-import yfinance as yf
-import pandas as pd
-import ta
 import streamlit as st
-import traceback
+import yfinance as yf
 import requests
+import pandas as pd
+import numpy as np
+import datetime
 
-# Page setup
+# ---------- Page Setup ----------
 st.set_page_config(page_title="Stock AI", layout="centered")
 st.title("📈 Smart Stock Buy/Sell Suggestion")
 
-# Input for stock ticker
+# ---------- User Input ----------
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 
-# Fetch stock data
-if ticker:
-    try:
-        df = yf.download(ticker, period="6mo", interval="1d")
+# ---------- Fetch Stock Data ----------
+@st.cache_data
+def get_stock_data(ticker):
+    end = datetime.datetime.today()
+    start = end - datetime.timedelta(days=100)
+    data = yf.download(ticker, start=start, end=end)
+    return data
 
-        if df.empty or 'Close' not in df.columns:
-            st.error("⚠️ Could not fetch stock data. Please check the symbol.")
-        else:
-            close_series = df['Close'].dropna().squeeze()
+data = get_stock_data(ticker)
 
-            if close_series.shape[0] < 30:
-                st.warning("⚠️ Not enough clean data to calculate indicators.")
-            else:
-                df_clean = pd.DataFrame({'Close': close_series})
-                df_clean['SMA20'] = df_clean['Close'].rolling(window=20).mean()
-                df_clean.dropna(inplace=True)
+if data.empty:
+    st.error("Failed to fetch stock data. Check the ticker symbol.")
+    st.stop()
 
-                rsi_calc = ta.momentum.RSIIndicator(close=df_clean['Close'], window=14)
-                df_clean['RSI'] = rsi_calc.rsi()
+# ---------- Technical Indicators ----------
+data['SMA20'] = data['Close'].rolling(window=20).mean()
+delta = data['Close'].diff()
+gain = np.where(delta > 0, delta, 0)
+loss = np.where(delta < 0, -delta, 0)
+avg_gain = pd.Series(gain).rolling(window=14).mean()
+avg_loss = pd.Series(loss).rolling(window=14).mean()
+rs = avg_gain / avg_loss
+rsi = 100 - (100 / (1 + rs))
+current_price = round(data['Close'][-1], 2)
+sma20 = round(data['SMA20'][-1], 2)
+current_rsi = round(rsi.iloc[-1], 2)
 
-                latest_close = df_clean['Close'].iloc[-1]
-                latest_sma = df_clean['SMA20'].iloc[-1]
-                latest_rsi = df_clean['RSI'].iloc[-1]
+# ---------- Display Technicals ----------
+st.subheader("📊 Latest Technical Data")
+st.markdown(f"**Current Price:** ₹{current_price}")
+st.markdown(f"**SMA-20:** ₹{sma20}")
+st.markdown(f"**RSI (14-day):** {current_rsi}")
 
-                st.subheader("📊 Latest Technical Data")
-                st.write(f"**Current Price:** ₹{latest_close:.2f}")
-                st.write(f"**SMA-20:** ₹{latest_sma:.2f}")
-                st.write(f"**RSI (14-day):** {latest_rsi:.2f}")
+# ---------- Simple AI Suggestion ----------
+suggestion = "🟡 **Hold** – Wait for better clarity."
+if current_price < sma20 and current_rsi < 40:
+    suggestion = "🔴 **Sell Signal** – Weak price action."
+elif current_price > sma20 and current_rsi > 60:
+    suggestion = "🟢 **Buy Signal** – Bullish trend detected."
 
-                if latest_close > latest_sma and latest_rsi < 70:
-                    suggestion = "🟢 **Buy Signal** – Strong momentum."
-                elif latest_close < latest_sma and latest_rsi > 30:
-                    suggestion = "🔴 **Sell Signal** – Weak price action."
-                else:
-                    suggestion = "⚠️ **Hold** – Unclear trend."
+st.subheader("🧠 AI Suggestion")
+st.markdown(suggestion)
 
-                st.subheader("🧠 AI Suggestion")
-                st.markdown(suggestion)
+# ---------- Plot Chart ----------
+st.line_chart(data[['Close', 'SMA20']])
 
-                st.line_chart(df_clean[['Close', 'SMA20']])
-
-    except Exception as e:
-        st.error("❌ App crashed. Here's the full error:")
-        st.code(traceback.format_exc())
-
-# -------------------------------------------------------------------
-# 📈 NIFTY 50 CALL/PUT INDICATORS (Using NSE Official API with headers)
-# -------------------------------------------------------------------
-st.markdown("---")
+# ---------- Nifty Options Data ----------
 st.subheader("📈 Nifty 50 Call/Put Indicators (Options Data)")
 
-try:
+def fetch_nifty_oi_data():
     url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*",
-        "Referer": "https://www.nseindia.com/option-chain"
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.nseindia.com/"
     }
+    with requests.Session() as session:
+        session.get("https://www.nseindia.com", headers=headers)
+        response = session.get(url, headers=headers)
+        try:
+            data = response.json()
+            return data
+        except Exception as e:
+            st.error(f"❌ Failed to load Nifty 50 options data.\n`{e}`")
+            return None
 
-    session = requests.Session()
-    session.get("https://www.nseindia.com", headers=headers)
-    response = session.get(url, headers=headers)
-    data = response.json()
+nifty_data = fetch_nifty_oi_data()
 
-    records = data["records"]
-    ce_data = [d for d in records["data"] if "CE" in d]
-    pe_data = [d for d in records["data"] if "PE" in d]
+if nifty_data:
+    records = nifty_data['records']['data']
+    ce_oi = []
+    pe_oi = []
+    strikes = []
 
-    top_calls = sorted(ce_data, key=lambda x: x["CE"]["openInterest"], reverse=True)[:3]
-    top_puts = sorted(pe_data, key=lambda x: x["PE"]["openInterest"], reverse=True)[:3]
+    for item in records:
+        if 'CE' in item and 'PE' in item:
+            ce_oi.append(item['CE']['openInterest'])
+            pe_oi.append(item['PE']['openInterest'])
+            strikes.append(item['strikePrice'])
 
-    total_call_oi = sum(d["CE"]["openInterest"] for d in ce_data)
-    total_put_oi = sum(d["PE"]["openInterest"] for d in pe_data)
-    pcr = total_put_oi / total_call_oi if total_call_oi else 0
+    if ce_oi and pe_oi:
+        max_ce = max(ce_oi)
+        max_pe = max(pe_oi)
+        ce_strike = strikes[ce_oi.index(max_ce)]
+        pe_strike = strikes[pe_oi.index(max_pe)]
 
-    st.success("✅ NSE Nifty Options Loaded")
-    st.write(f"📊 Put/Call Ratio: **{pcr:.2f}**")
+        st.markdown(f"🔵 **Highest Call OI (Resistance):** {ce_strike} with OI {max_ce}")
+        st.markdown(f"🟢 **Highest Put OI (Support):** {pe_strike} with OI {max_pe}")
 
-    st.markdown("### 🔴 Top 3 Resistance (Call OI)")
-    for c in top_calls:
-        st.write(f"Strike ₹{c['CE']['strikePrice']}: OI = {c['CE']['openInterest']:,}")
-
-    st.markdown("### 🟢 Top 3 Support (Put OI)")
-    for p in top_puts:
-        st.write(f"Strike ₹{p['PE']['strikePrice']}: OI = {p['PE']['openInterest']:,}")
-
-except Exception as e:
-    st.error("❌ Failed to load Nifty 50 options data.")
-    st.code(traceback.format_exc())
+        chart_data = pd.DataFrame({
+            'Strike Price': strikes,
+            'Call OI': ce_oi,
+            'Put OI': pe_oi
+        })
+        chart_data.set_index('Strike Price', inplace=True)
+        st.bar_chart(chart_data)
+    else:
+        st.warning("No options data found.")
