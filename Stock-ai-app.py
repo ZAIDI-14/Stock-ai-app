@@ -23,6 +23,23 @@ if symbol:
     st.metric("Current Price", f"₹{current_price:.2f}")
     st.metric("Breakeven", f"₹{breakeven:.2f}")
     st.metric("P/L", f"₹{profit_loss:.2f}")
+    # Total and Profit
+total_cost = buy_price * quantity
+current_value = current_price * quantity
+profit_loss = current_value - total_cost
+breakeven = total_cost / quantity
+
+st.metric("Current Price", f"₹{current_price:.2f}")
+st.metric("Breakeven", f"₹{breakeven:.2f}")
+st.metric("P/L", f"₹{profit_loss:.2f}")
+
+# 🚨 Check if profit target met
+if profit_loss >= 1500:
+    st.success("💰 Target Met: You made ₹1,500+ profit today!")
+elif profit_loss >= 0:
+    st.info("✅ You are in profit. Keep tracking.")
+else:
+    st.warning("📉 You are in loss. Be careful.")
 
     # RSI Calculation
     delta = data["Close"].diff()
