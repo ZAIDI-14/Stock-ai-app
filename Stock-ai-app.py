@@ -5,102 +5,77 @@ import streamlit as st
 import traceback
 import requests
 
-# -------------------------------------
-# 🔷 Page Settings
-# -------------------------------------
+# Page setup
 st.set_page_config(page_title="Stock AI", layout="centered")
-st.title("📈 Smart Stock Buy/Sell Suggestion")
+st.title("📈 Smart Stock Buy/Sell + Nifty Call/Put AI")
 
-# -------------------------------------
-# 🔷 Stock Analysis
-# -------------------------------------
+# — Stock Analysis —
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
-
 if ticker:
     try:
         df = yf.download(ticker, period="6mo", interval="1d")
-
         if df.empty or 'Close' not in df.columns:
-            st.error("⚠️ Could not fetch stock data. Please check the symbol.")
+            st.error("⚠️ Could not fetch stock data.")
         else:
-            close_series = df['Close'].dropna().squeeze()
-
-            if close_series.shape[0] < 30:
-                st.warning("⚠️ Not enough clean data to calculate indicators.")
+            cs = df['Close'].dropna().squeeze()
+            if cs.shape[0] < 30:
+                st.warning("⚠️ Not enough data for indicators.")
             else:
-                df_clean = pd.DataFrame({'Close': close_series})
-                df_clean['SMA20'] = df_clean['Close'].rolling(window=20).mean()
-                df_clean.dropna(inplace=True)
+                dfc = pd.DataFrame({'Close': cs})
+                dfc['SMA20'] = dfc['Close'].rolling(20).mean().dropna()
+                rsi = ta.momentum.RSIIndicator(close=dfc['Close'], window=14).rsi()
+                dfc['RSI'] = rsi
 
-                rsi_calc = ta.momentum.RSIIndicator(close=df_clean['Close'], window=14)
-                df_clean['RSI'] = rsi_calc.rsi()
+                price, sma20, rsi_val = dfc.iloc[-1][['Close','SMA20','RSI']]
+                st.subheader("📊 Technical Data")
+                st.write(f"**Price:** ₹{price:.2f}")
+                st.write(f"**SMA‑20:** ₹{sma20:.2f}")
+                st.write(f"**RSI (14d):** {rsi_val:.2f}")
 
-                latest_close = df_clean['Close'].iloc[-1]
-                latest_sma = df_clean['SMA20'].iloc[-1]
-                latest_rsi = df_clean['RSI'].iloc[-1]
-
-                st.subheader("📊 Latest Technical Data")
-                st.write(f"**Current Price:** ₹{latest_close:.2f}")
-                st.write(f"**SMA-20:** ₹{latest_sma:.2f}")
-                st.write(f"**RSI (14-day):** {latest_rsi:.2f}")
-
-                if latest_close > latest_sma and latest_rsi < 70:
-                    suggestion = "🟢 **Buy Signal** – Strong momentum."
-                elif latest_close < latest_sma and latest_rsi > 30:
-                    suggestion = "🔴 **Sell Signal** – Weak price action."
-                else:
-                    suggestion = "⚠️ **Hold** – Unclear trend."
-
-                st.subheader("🧠 AI Suggestion")
-                st.markdown(suggestion)
-                st.line_chart(df_clean[['Close', 'SMA20']])
-
-    except Exception as e:
-        st.error("❌ App crashed. Here's the full error:")
+                signal = "🟢 **Buy**" if price > sma20 and rsi_val < 70 \
+                    else "🔴 **Sell**" if price < sma20 and rsi_val > 30 \
+                    else "⚠️ **Hold**"
+                st.subheader("🧠 Signal")
+                st.markdown(signal)
+                st.line_chart(dfc[['Close', 'SMA20']])
+    except Exception:
+        st.error("❌ Stock analysis failed.")
         st.code(traceback.format_exc())
 
-# -------------------------------------
-# 🔷 Nifty 50 Options Indicators
-# -------------------------------------
+# — Nifty 50 Options —
 st.markdown("---")
-st.subheader("📈 Nifty 50 Call/Put Indicators (Options Data)")
+st.subheader("📈 Nifty 50 Call/Put Indicators (Options)")
 
 try:
-    url = "https://niftyapi.vercel.app/api/nifty_option_chain"
-    response = requests.get(url, timeout=10)
-    result = response.json()
+    api_url = "https://niftyapi.vercel.app/api/nifty_option_chain"
+    resp = requests.get(api_url, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()['data']
+    expiry = resp.json()['expiry']
 
-    option_data = result["data"]
-    expiry = result["expiry"]
+    calls = sorted(data['calls'], key=lambda x: x['oi'], reverse=True)[:3]
+    puts = sorted(data['puts'], key=lambda x: x['oi'], reverse=True)[:3]
+    total_c = sum(item['oi'] for item in data['calls'])
+    total_p = sum(item['oi'] for item in data['puts'])
+    pcr = total_p / total_c if total_c else 0
 
-    top_calls = sorted(option_data["calls"], key=lambda x: x["oi"], reverse=True)[:3]
-    top_puts = sorted(option_data["puts"], key=lambda x: x["oi"], reverse=True)[:3]
-
-    total_call_oi = sum(item["oi"] for item in option_data["calls"])
-    total_put_oi = sum(item["oi"] for item in option_data["puts"])
-    pcr = total_put_oi / total_call_oi if total_call_oi else 0
-
-    st.write(f"📅 **Expiry Date:** `{expiry}`")
-    st.write(f"🟣 **Put/Call Ratio (PCR):** `{pcr:.2f}`")
-    st.write(f"🟢 **Total Put OI:** `{total_put_oi:,}`")
-    st.write(f"🔴 **Total Call OI:** `{total_call_oi:,}`")
-
-    st.markdown("### 🛡️ Top 3 Support (Put OI):")
-    for row in top_puts:
-        st.write(f"- Strike ₹{row['strike']} → OI: {row['oi']:,}")
+    st.write(f"📅 **Expiry:** {expiry}")
+    st.write(f"🟣 **Put/Call Ratio:** {pcr:.2f}")
+    st.write(f"🔴 **Total Call OI:** {total_c:,}")
+    st.write(f"🟢 **Total Put OI:** {total_p:,}")
 
     st.markdown("### 🔥 Top 3 Resistance (Call OI):")
-    for row in top_calls:
-        st.write(f"- Strike ₹{row['strike']} → OI: {row['oi']:,}")
+    for x in calls:
+        st.write(f"Strike ₹{x['strike']}: OI = {x['oi']:,}")
 
-    max_pain = 0
-    for put in top_puts:
-        for call in top_calls:
-            if put["strike"] == call["strike"]:
-                max_pain = put["strike"]
-    st.success(f"🎯 Estimated Max Pain Level: ₹{max_pain}")
+    st.markdown("### 🛡️ Top 3 Support (Put OI):")
+    for x in puts:
+        st.write(f"Strike ₹{x['strike']}: OI = {x['oi']:,}")
+
+    maxpain = next((c['strike'] for c in calls if any(p['strike'] == c['strike'] for p in puts)), None)
+    st.success(f"🎯 Max Pain Strike: ₹{maxpain}")
 
 except Exception as e:
-    st.error("❌ Failed to load Nifty 50 options data.")
+    st.error("❌ Nifty options data error.")
     st.code(str(e))
     st.code(traceback.format_exc())
