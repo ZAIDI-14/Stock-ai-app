@@ -3,16 +3,13 @@ import pandas as pd
 import ta
 import streamlit as st
 import traceback
-from nsepython import *
+import requests
 
-# --- Streamlit App Setup ---
 st.set_page_config(page_title="Stock AI", layout="centered")
 st.title("📈 Smart Stock Buy/Sell Suggestion")
 
-# --- User Input ---
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 
-# --- Stock Technical Analysis ---
 if ticker:
     try:
         df = yf.download(ticker, period="6mo", interval="1d")
@@ -20,6 +17,7 @@ if ticker:
         if df.empty or 'Close' not in df.columns:
             st.error("⚠️ Could not fetch stock data. Please check the symbol.")
         else:
+            # ✅ Clean Close prices
             close_series = df['Close'].dropna().squeeze()
 
             if close_series.shape[0] < 30:
@@ -50,20 +48,36 @@ if ticker:
 
                 st.subheader("🧠 AI Suggestion")
                 st.markdown(suggestion)
+
                 st.line_chart(df_clean[['Close', 'SMA20']])
 
     except Exception as e:
         st.error("❌ App crashed. Here's the full error:")
         st.code(traceback.format_exc())
 
-# --- Nifty 50 Options Chain Analysis ---
+# -----------------------------------
+# 🧠 NIFTY 50 OPTIONS INDICATORS
+# -----------------------------------
+
 st.markdown("---")
 st.subheader("📈 Nifty 50 Call/Put Indicators (Options Data)")
 
 try:
-    nse_option_data = nse_optionchain_scrapper("NIFTY", "index")
-    data = nse_option_data['records']['data']
-    expiry = nse_option_data['records']['expiryDates'][0]
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+    url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
+    session = requests.Session()
+    session.headers.update(headers)
+
+    # NSE requires visiting homepage first
+    session.get("https://www.nseindia.com", timeout=5)
+    response = session.get(url, timeout=5)
+    data = response.json()
+
+    records = data['records']
+    all_data = records['data']
+    expiry = records['expiryDates'][0]
 
     call_oi_total = 0
     put_oi_total = 0
@@ -71,7 +85,7 @@ try:
     top_calls = []
     top_puts = []
 
-    for row in data:
+    for row in all_data:
         strike = row.get("strikePrice")
         ce = row.get("CE")
         pe = row.get("PE")
@@ -112,6 +126,6 @@ try:
     st.success(f"🎯 Estimated Max Pain Level: ₹{max_pain}")
 
 except Exception as e:
-    st.error("❌ Nifty 50 option chain failed.")
+    st.error("❌ Failed to fetch Nifty 50 options data.")
     st.code(str(e))
     st.code(traceback.format_exc())
