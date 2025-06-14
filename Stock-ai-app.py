@@ -1,116 +1,65 @@
 import streamlit as st
 import yfinance as yf
-import pandas as pd
 import numpy as np
-import requests
-import time
+import pandas as pd
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="📊 Stock AI + Nifty Indicators", layout="centered")
+# App title
 st.title("📈 Stock AI with Nifty 50 Call/Put Indicators")
 
+# Input
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
 
+# Load data
+@st.cache_data
+def load_data(ticker):
+    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+    return df
+
 if ticker:
-    try:
-        df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+    df = load_data(ticker)
 
-        if df.empty or 'Close' not in df.columns:
-            st.error("⚠️ Could not fetch stock data.")
+    if df.empty or 'Close' not in df.columns or df['Close'].isna().sum() > 5 or len(df) < 30:
+        st.warning("⚠️ Not enough clean data to calculate indicators.")
+    else:
+        df = df[['Close']].dropna().copy()
+        close = df['Close'].values
+
+        if close.ndim != 1:
+            st.error("❌ Close data is not 1D.")
         else:
-            df = df[['Close']].copy()
-            df.dropna(inplace=True)
+            # SMA
+            df['SMA_14'] = df['Close'].rolling(window=14).mean()
 
-            if len(df) < 30:
-                st.warning("⚠️ Not enough data to calculate indicators.")
-            else:
-                df['SMA20'] = df['Close'].rolling(window=20).mean()
+            # RSI calculation
+            delta = np.diff(close)
+            up = delta.clip(min=0)
+            down = -1 * delta.clip(max=0)
 
-                # Ensure 'Close' is 1D
-                close = df['Close'].values
-                if close.ndim != 1:
-                    st.error("❌ Close price data invalid format.")
-                else:
-                    delta = np.diff(close)
-                    gain = np.where(delta > 0, delta, 0)
-                    loss = np.where(delta < 0, -delta, 0)
+            roll_up = pd.Series(up).rolling(14).mean()
+            roll_down = pd.Series(down).rolling(14).mean()
 
-                    avg_gain = pd.Series(gain).rolling(window=14).mean()
-                    avg_loss = pd.Series(loss).rolling(window=14).mean()
-                    rs = avg_gain / avg_loss
-                    rsi = 100 - (100 / (1 + rs))
+            RS = roll_up / roll_down
+            RSI = 100.0 - (100.0 / (1.0 + RS))
+            df['RSI'] = RSI
 
-                    df = df.iloc[1:]  # align with delta
-                    df['RSI'] = rsi.values
+            # Plotting
+            st.subheader(f"{ticker} Stock Price & Indicators")
+            fig, ax = plt.subplots(2, 1, figsize=(10, 6))
 
-                    df.dropna(inplace=True)
+            ax[0].plot(df.index, df['Close'], label='Close')
+            ax[0].plot(df.index, df['SMA_14'], label='SMA 14')
+            ax[0].set_title('Stock Price & SMA')
+            ax[0].legend()
 
-                    latest = df.iloc[-1]
-                    st.subheader("📊 Technical Summary")
-                    st.write(f"**Price:** ₹{latest['Close']:.2f}")
-                    st.write(f"**SMA20:** ₹{latest['SMA20']:.2f}")
-                    st.write(f"**RSI:** {latest['RSI']:.2f}")
+            ax[1].plot(df.index, df['RSI'], label='RSI', color='orange')
+            ax[1].axhline(70, color='red', linestyle='--')
+            ax[1].axhline(30, color='green', linestyle='--')
+            ax[1].set_title('Relative Strength Index (RSI)')
+            ax[1].legend()
 
-                    if latest['Close'] > latest['SMA20'] and latest['RSI'] < 70:
-                        st.success("🟢 Buy Signal")
-                    elif latest['Close'] < latest['SMA20'] and latest['RSI'] > 30:
-                        st.error("🔴 Sell Signal")
-                    else:
-                        st.info("⚪ Hold Signal")
+            st.pyplot(fig)
 
-                    st.line_chart(df[['Close', 'SMA20']])
-    except Exception as e:
-        st.error("❌ Error occurred:")
-        st.code(str(e))
-
-# -----------------------
-# 📈 Nifty 50 Option Data
-# -----------------------
-st.markdown("---")
-st.subheader("📊 Nifty 50 Call/Put OI Levels")
-
-@st.cache_data(ttl=3600)
-def fetch_nifty_options():
-    url = "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY"
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com"
-    }
-    session = requests.Session()
-    session.headers.update(headers)
-    try:
-        session.get("https://www.nseindia.com", timeout=5)
-        time.sleep(1)
-        res = session.get(url, timeout=5)
-        return res.json()
-    except Exception:
-        return None
-
-nse_data = fetch_nifty_options()
-if nse_data:
-    try:
-        records = nse_data['records']['data']
-        filtered = [i for i in records if 'CE' in i and 'PE' in i]
-        total_call_oi = sum(i['CE']['openInterest'] for i in filtered if 'CE' in i)
-        total_put_oi = sum(i['PE']['openInterest'] for i in filtered if 'PE' in i)
-        pcr = total_put_oi / total_call_oi if total_call_oi else 0
-
-        st.write(f"**Put/Call Ratio:** {pcr:.2f}")
-        st.write(f"🔴 Total Call OI: {total_call_oi:,}")
-        st.write(f"🟢 Total Put OI: {total_put_oi:,}")
-
-        st.markdown("### 🔺 Resistance (Call OI)")
-        top_calls = sorted(filtered, key=lambda x: x['CE']['openInterest'], reverse=True)[:3]
-        for i in top_calls:
-            st.write(f"₹{i['strikePrice']} → {i['CE']['openInterest']:,}")
-
-        st.markdown("### 🔻 Support (Put OI)")
-        top_puts = sorted(filtered, key=lambda x: x['PE']['openInterest'], reverse=True)[:3]
-        for i in top_puts:
-            st.write(f"₹{i['strikePrice']} → {i['PE']['openInterest']:,}")
-
-    except Exception as e:
-        st.error("⚠️ Nifty option data error:")
-        st.code(str(e))
-else:
-    st.warning("❌ NSE data fetch failed. Try again later.")
+            # Option chain placeholder (mock)
+            st.subheader("🔮 Nifty 50 Call/Put Signal (Mock Data)")
+            st.info("Call/Put analysis for Nifty 50 would go here. (Live option data needs NSE scraping or API access)")
