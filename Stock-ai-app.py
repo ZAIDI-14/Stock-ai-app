@@ -7,7 +7,7 @@ import requests
 
 # Page setup
 st.set_page_config(page_title="Stock AI", layout="centered")
-st.title("📈 Smart Stock Buy/Sell + Nifty Call/Put AI")
+st.title("📈 Smart Stock Buy/Sell + Nifty Option Indicators")
 
 # — Stock Analysis —
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
@@ -42,16 +42,24 @@ if ticker:
         st.error("❌ Stock analysis failed.")
         st.code(traceback.format_exc())
 
-# — Nifty 50 Options —
+# — Nifty Options Debug Section —
 st.markdown("---")
-st.subheader("📈 Nifty 50 Call/Put Indicators (Options)")
+st.subheader("📈 Nifty 50 Call/Put Indicators – Debug")
 
 try:
     api_url = "https://niftyapi.vercel.app/api/nifty_option_chain"
     resp = requests.get(api_url, timeout=10)
-    resp.raise_for_status()
-    data = resp.json()['data']
-    expiry = resp.json()['expiry']
+
+    # Debugging output
+    st.write("📡 HTTP Status:", resp.status_code)
+    st.write("📋 Response preview (first 200 chars):")
+    st.code(resp.text[:200])
+
+    # Try parsing JSON
+    data_json = resp.json()
+    data = data_json['data']
+    expiry = data_json['expiry']
+    st.success(f"✅ Data loaded for expiry: {expiry}")
 
     calls = sorted(data['calls'], key=lambda x: x['oi'], reverse=True)[:3]
     puts = sorted(data['puts'], key=lambda x: x['oi'], reverse=True)[:3]
@@ -59,7 +67,6 @@ try:
     total_p = sum(item['oi'] for item in data['puts'])
     pcr = total_p / total_c if total_c else 0
 
-    st.write(f"📅 **Expiry:** {expiry}")
     st.write(f"🟣 **Put/Call Ratio:** {pcr:.2f}")
     st.write(f"🔴 **Total Call OI:** {total_c:,}")
     st.write(f"🟢 **Total Put OI:** {total_p:,}")
@@ -76,6 +83,6 @@ try:
     st.success(f"🎯 Max Pain Strike: ₹{maxpain}")
 
 except Exception as e:
-    st.error("❌ Nifty options data error.")
+    st.error("❌ Failed to load Nifty options data.")
     st.code(str(e))
     st.code(traceback.format_exc())
