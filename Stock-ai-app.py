@@ -14,16 +14,25 @@ if ticker:
     if df.empty:
         st.error("⚠️ Could not fetch stock data. Please check the symbol.")
     else:
-        df['SMA20'] = df['Close'].rolling(window=20).mean()
-        df.dropna(inplace=True)
+        # Remove any missing values in Close
+        df = df[['Close']].dropna()
+        df = df[df['Close'].notnull()]
+        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+        df = df.dropna()
 
-        if df.shape[0] < 20:
-            st.warning("⚠️ Not enough data to calculate indicators.")
+        # Recheck again after cleaning
+        if df.shape[0] < 30:
+            st.warning("⚠️ Not enough clean data to calculate indicators.")
         else:
             try:
-                # ✅ THIS LINE FIXES THE 1-D ERROR
-                rsi = ta.momentum.RSIIndicator(close=df['Close'], window=14)
-                df['RSI'] = rsi.rsi()
+                # Calculate indicators
+                df['SMA20'] = df['Close'].rolling(window=20).mean()
+                df = df.dropna()
+
+                # 🛠️ FIXED: Make sure input is a Series, not DataFrame
+                close_series = df['Close'].astype(float)
+                rsi_calc = ta.momentum.RSIIndicator(close=close_series, window=14)
+                df['RSI'] = rsi_calc.rsi()
 
                 latest_close = df['Close'].iloc[-1]
                 latest_sma = df['SMA20'].iloc[-1]
@@ -34,13 +43,13 @@ if ticker:
                 st.write(f"**SMA-20:** ₹{latest_sma:.2f}")
                 st.write(f"**RSI (14-day):** {latest_rsi:.2f}")
 
-                # Suggestion Logic
+                # Buy/Sell Logic
                 if latest_close > latest_sma and latest_rsi < 70:
-                    suggestion = "🟢 **Buy Signal** – Price is above SMA and RSI is healthy."
+                    suggestion = "🟢 **Buy Signal** – Strong momentum."
                 elif latest_close < latest_sma and latest_rsi > 30:
-                    suggestion = "🔴 **Sell Signal** – Price is below SMA and RSI shows weakness."
+                    suggestion = "🔴 **Sell Signal** – Weak price action."
                 else:
-                    suggestion = "⚠️ **Hold** – No clear signal."
+                    suggestion = "⚠️ **Hold** – Unclear trend."
 
                 st.subheader("🧠 AI Suggestion")
                 st.markdown(suggestion)
@@ -48,4 +57,4 @@ if ticker:
                 st.line_chart(df[['Close', 'SMA20']])
 
             except Exception as e:
-                st.error(f"❌ Error: {str(e)}")
+                st.error(f"❌ Processing error: {str(e)}")
