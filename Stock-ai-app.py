@@ -1,65 +1,72 @@
 import streamlit as st
 import yfinance as yf
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import numpy as np
+import requests
+import time
 
-# App title
-st.title("📈 Stock AI with Nifty 50 Call/Put Indicators")
+# Setup
+st.set_page_config(page_title="Stock AI + Nifty Call/Put", layout="centered")
+st.title("📈 Stock AI + Live Nifty Call/Put Indicators")
 
-# Input
+# Stock Input & Analysis
 ticker = st.text_input("Enter stock ticker (e.g., RELIANCE.NS)", "RELIANCE.NS")
-
-# Load data
-@st.cache_data
-def load_data(ticker):
-    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-    return df
-
 if ticker:
-    df = load_data(ticker)
-
-    if df.empty or 'Close' not in df.columns or df['Close'].isna().sum() > 5 or len(df) < 30:
-        st.warning("⚠️ Not enough clean data to calculate indicators.")
+    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+    if df.empty or 'Close' not in df.columns:
+        st.error("⚠️ Could not fetch stock data.")
     else:
-        df = df[['Close']].dropna().copy()
-        close = df['Close'].values
-
-        if close.ndim != 1:
-            st.error("❌ Close data is not 1D.")
+        df = df[['Close']].dropna()
+        if len(df) >= 30:
+            df['SMA20'] = df['Close'].rolling(20).mean()
+            delta = df['Close'].diff().dropna()
+            gain = delta.clip(lower=0)
+            loss = -delta.clip(upper=0)
+            avg_gain = gain.rolling(14).mean()
+            avg_loss = loss.rolling(14).mean()
+            df = df.dropna()
+            df['RSI'] = 100 - (100 / (1 + avg_gain.iloc[-len(df):] / avg_loss.iloc[-len(df):]))
+            latest = df.iloc[-1]
+            st.subheader("📊 Latest Technical Data")
+            st.write(f"**Price:** ₹{latest['Close']:.2f}")
+            st.write(f"**SMA‑20:** ₹{latest['SMA20']:.2f}")
+            st.write(f"**RSI:** {latest['RSI']:.2f}")
+            signal = "⚪ Hold"
+            if latest['Close'] > latest['SMA20'] and latest['RSI'] < 70:
+                signal = "🟢 Buy"
+            elif latest['Close'] < latest['SMA20'] and latest['RSI'] > 30:
+                signal = "🔴 Sell"
+            st.subheader("🧠 Signal"); st.markdown(signal)
+            st.line_chart(df[['Close','SMA20']])
         else:
-            # SMA
-            df['SMA_14'] = df['Close'].rolling(window=14).mean()
+            st.warning("⚠️ Not enough data for indicators.")
 
-            # RSI calculation
-            delta = np.diff(close)
-            up = delta.clip(min=0)
-            down = -1 * delta.clip(max=0)
+# Live Nifty Options Chain
+st.markdown("---")
+st.subheader("📈 Live Nifty Call/Put Indicators (NSE)")
 
-            roll_up = pd.Series(up).rolling(14).mean()
-            roll_down = pd.Series(down).rolling(14).mean()
+def get_nifty_chain():
+    url = "https://niftyapi.vercel.app/api/nifty_option_chain"
+    try:
+        return requests.get(url, timeout=10).json()
+    except:
+        return None
 
-            RS = roll_up / roll_down
-            RSI = 100.0 - (100.0 / (1.0 + RS))
-            df['RSI'] = RSI
-
-            # Plotting
-            st.subheader(f"{ticker} Stock Price & Indicators")
-            fig, ax = plt.subplots(2, 1, figsize=(10, 6))
-
-            ax[0].plot(df.index, df['Close'], label='Close')
-            ax[0].plot(df.index, df['SMA_14'], label='SMA 14')
-            ax[0].set_title('Stock Price & SMA')
-            ax[0].legend()
-
-            ax[1].plot(df.index, df['RSI'], label='RSI', color='orange')
-            ax[1].axhline(70, color='red', linestyle='--')
-            ax[1].axhline(30, color='green', linestyle='--')
-            ax[1].set_title('Relative Strength Index (RSI)')
-            ax[1].legend()
-
-            st.pyplot(fig)
-
-            # Option chain placeholder (mock)
-            st.subheader("🔮 Nifty 50 Call/Put Signal (Mock Data)")
-            st.info("Call/Put analysis for Nifty 50 would go here. (Live option data needs NSE scraping or API access)")
+options = get_nifty_chain()
+if options and "data" in options:
+    calls = options["data"]["calls"]
+    puts = options["data"]["puts"]
+    total_call = sum(x["oi"] for x in calls)
+    total_put = sum(x["oi"] for x in puts)
+    pcr = total_put / total_call if total_call else None
+    st.write(f"📊 PCR: **{pcr:.2f}**")
+    st.write(f"🔴 Total Call OI: {total_call:,}")
+    st.write(f"🟢 Total Put OI: {total_put:,}")
+    st.markdown("### 🔴 Top 3 Resistance (Call OI)")
+    for x in sorted(calls, key=lambda x: x["oi"], reverse=True)[:3]:
+        st.write(f"₹{x['strike']} → {x['oi']:,}")
+    st.markdown("### 🟢 Top 3 Support (Put OI)")
+    for x in sorted(puts, key=lambda x: x["oi"], reverse=True)[:3]:
+        st.write(f"₹{x['strike']} → {x['oi']:,}")
+else:
+    st.error("❌ Failed to load Nifty options data.")
