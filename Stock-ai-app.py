@@ -38,7 +38,7 @@ if ticker:
             latest = df.iloc[-1]
 
             st.subheader("📊 Latest Technical Data")
-            if 'Close' in latest and pd.notna(latest['Close']):
+            if isinstance(latest, pd.Series) and 'Close' in latest and pd.notna(latest['Close']):
                 st.write(f"**Price:** ₹{latest['Close']:.2f}")
             else:
                 st.warning("⚠️ Price data not available.")
